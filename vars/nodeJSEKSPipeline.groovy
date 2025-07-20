@@ -2,8 +2,10 @@ def call(Map configMap){
     pipeline {
         agent { label 'AGENT-1'}
         environment {
-            greeting = configMap.get('greeting')
-    // When we call this default call function, we assign configMap variable  a value, so assign that value to the greeting.
+            PROJECT = configMap.get('project')
+            COMPONENT = configMap.get('component')
+            appVersion = ''
+            ACC_ID = '090808669085'
         }
         options {
             disableConcurrentBuilds ()
@@ -14,14 +16,67 @@ def call(Map configMap){
         }
 
         stages {
-            stage('Print Greeting') {
+            stage('Read Version') {
                 steps {
                     script{
-                        echo "App Version is : $greeting"
+                        def packageJson = readJSON file: 'package.json'
+                        appVersion = packageJson.version
+                        echo "App Version is : $appVersion"
                     }
                 }
             }
-            
+            stage('Install Dependencies') {
+                steps {
+                    script{
+                        sh """
+                        npm install
+                        """
+                    }
+                }
+            }
+            // stage('Run Sonarqube') {
+            //     environment {
+            //         scannerHome = tool 'sonar-scanner-7.1';
+            //     }
+            //     steps {
+            //       withSonarQubeEnv('sonar-scanner-7.1') {
+            //         sh "${scannerHome}/bin/sonar-scanner"
+            //         // This is generic command works for any language
+            //       }
+            //     }
+            // }
+            // stage("Quality Gate") {
+            //     steps {
+            //       timeout(time: 1, unit: 'HOURS') {
+            //         waitForQualityGate abortPipeline: true
+            //       }
+            //     }
+            // }
+            stage('Docker Build') {
+                steps {
+                    script{
+                    withAWS(region: 'us-east-1', credentials: 'aws-creds') {
+                        sh """
+                        aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin ${ACC_ID}.dkr.ecr.us-east-1.amazonaws.com
+
+                        docker build -t ${ACC_ID}.dkr.ecr.us-east-1.amazonaws.com/${PROJECT}/${COMPONENT}:${appVersion} .
+
+                        docker push ${ACC_ID}.dkr.ecr.us-east-1.amazonaws.com/${PROJECT}/${COMPONENT}:${appVersion}
+
+                        """
+                    }
+                        
+                    }
+                }
+            }
+            stage('Trigger deploy') {
+                when {
+                    expression { params.deploy } 
+                }
+                steps {
+                    build job: 'backend-cd', parameters: [ string(name: 'version', value: "${appVersion}" )], wait : true
+                }
+            }
         }
             
         post {
